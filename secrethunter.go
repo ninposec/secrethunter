@@ -1,47 +1,55 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
-	apiKeyPattern  = regexp.MustCompile(`apiKey:\s*"(.+?)"`)
-	secretPattern  = regexp.MustCompile(`secret:\s*"(.+?)"`)
-	api_keyPattern = regexp.MustCompile(`api_key:\s*"(.+?)"`)
+	apiKeyPattern   = regexp.MustCompile(`apiKey:\s*['"](.+?)['"]`)
+	api_keyPattern  = regexp.MustCompile(`api_key:\s*['"](.+?)['"]`)
+	api_Pattern     = regexp.MustCompile(`api:\s*['"](.+?)['"]`)
+	token_Pattern   = regexp.MustCompile(`token:\s*['"](.+?)['"]`)
+	apiKey2_Pattern = regexp.MustCompile(`API_KEY:\s*['"](.+?)['"]`)
+	secret_Pattern  = regexp.MustCompile(`SECRET:\s*['"](.+?)['"]`)
+	access_Pattern  = regexp.MustCompile(`access_token:\s*['"](.+?)['"]`)
 )
 
 func main() {
 	filenamePtr := flag.String("file", "", "the filename containing the list of URLs")
 	flag.Parse()
 
+	var urls []string
 	if *filenamePtr == "" {
-		fmt.Println("Error: Please provide a filename using the -file flag")
-		os.Exit(1)
-	}
-
-	urls, err := extractUrls(*filenamePtr)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		urls = readUrlsFromStdin()
+	} else {
+		var err error
+		urls, err = extractUrls(*filenamePtr)
+		if err != nil {
+			log.Fatalf("Error reading URLs from file %s: %v", *filenamePtr, err)
+		}
 	}
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
-	client := &http.Client{Transport: tr}
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
 
 	for _, url := range urls {
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 		if err != nil {
-			fmt.Printf("Error creating request for %s: %s\n", url, err)
+			log.Printf("Error creating request for %s: %v", url, err)
 			continue
 		}
 
@@ -50,7 +58,7 @@ func main() {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			// Suppress HTTP and connection error messages
+			//log.Printf("Error making request to %s: %v", url, err)
 			continue
 		}
 
@@ -62,7 +70,7 @@ func main() {
 		body, err := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			fmt.Printf("Error reading response body from %s: %s\n", url, err)
+			//log.Printf("Error reading response body from %s: %v", url, err)
 			continue
 		}
 
@@ -71,16 +79,32 @@ func main() {
 			matches = append(matches, fmt.Sprintf("apiKey=%s", apiKey))
 		}
 
-		if secret := extractPattern(secretPattern, body); secret != "" {
-			matches = append(matches, fmt.Sprintf("secret=%s", secret))
-		}
-
 		if api_key := extractPattern(api_keyPattern, body); api_key != "" {
 			matches = append(matches, fmt.Sprintf("api_key=%s", api_key))
 		}
 
+		if api := extractPattern(api_Pattern, body); api != "" {
+			matches = append(matches, fmt.Sprintf("api=%s", api))
+		}
+
+		if token := extractPattern(token_Pattern, body); token != "" {
+			matches = append(matches, fmt.Sprintf("token=%s", token))
+		}
+
+		if API_KEY := extractPattern(apiKey2_Pattern, body); API_KEY != "" {
+			matches = append(matches, fmt.Sprintf("API_KEY=%s", API_KEY))
+		}
+
+		if SECRET := extractPattern(secret_Pattern, body); SECRET != "" {
+			matches = append(matches, fmt.Sprintf("SECRET=%s", SECRET))
+		}
+
+		if access_token := extractPattern(access_Pattern, body); access_token != "" {
+			matches = append(matches, fmt.Sprintf("access_token=%s", access_token))
+		}
+
 		if len(matches) > 0 {
-			fmt.Printf("%s: %s\n", url, strings.Join(matches, ", "))
+			log.Printf("%s: %s", url, strings.Join(matches, ", "))
 		}
 	}
 }
@@ -88,7 +112,7 @@ func main() {
 func extractUrls(filename string) ([]string, error) {
 	content, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file %s: %s", filename, err)
+		return nil, fmt.Errorf("error reading file %s: %v", filename, err)
 	}
 
 	urls := []string{}
@@ -112,4 +136,22 @@ func extractPattern(pattern *regexp.Regexp, body []byte) string {
 		return string(match[1])
 	}
 	return ""
+}
+
+func readUrlsFromStdin() []string {
+	var urls []string
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		url := strings.TrimSpace(scanner.Text())
+		if url != "" {
+			urls = append(urls, url)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error reading URLs from stdin: %v", err)
+	}
+	if len(urls) == 0 {
+		log.Fatalf("No URLs found in stdin")
+	}
+	return urls
 }
