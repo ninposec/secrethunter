@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 var (
@@ -26,8 +28,26 @@ var (
 )
 
 func main() {
+	log.SetFlags(0) // Disable default timestamp
+
+	// Custom usage message
+	flag.Usage = func() {
+		fmt.Printf("Usage of %s:\n", "secrethunter")
+		fmt.Println("secrethunter scans URLs for exposed API keys and secrets.")
+		fmt.Println("Provide URLs as a list in a text file or through stdin.")
+		fmt.Println("Example:")
+		fmt.Println("\tsecrethunter --file urls.txt")
+		flag.PrintDefaults()
+	}
+
+	helpPtr := flag.Bool("h", false, "show help message")
 	filenamePtr := flag.String("file", "", "the filename containing the list of URLs")
 	flag.Parse()
+
+	if *helpPtr {
+		flag.Usage()
+		os.Exit(0)
+	}
 
 	var urls []string
 	if *filenamePtr == "" {
@@ -45,6 +65,8 @@ func main() {
 	}
 
 	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+
+	red := color.New(color.FgRed).SprintFunc()
 
 	for _, url := range urls {
 		req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
@@ -104,7 +126,7 @@ func main() {
 		}
 
 		if len(matches) > 0 {
-			log.Printf("%s: %s", url, strings.Join(matches, ", "))
+			log.Printf("%s: %s", url, red(strings.Join(matches, ", ")))
 		}
 	}
 }
