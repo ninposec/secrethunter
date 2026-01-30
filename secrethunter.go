@@ -26,6 +26,7 @@ var (
 	apiKey2_Pattern = regexp.MustCompile(`API_KEY:\s*['"](.+?)['"]`)
 	secret_Pattern  = regexp.MustCompile(`SECRET:\s*['"](.+?)['"]`)
 	access_Pattern  = regexp.MustCompile(`access_token:\s*['"](.+?)['"]`)
+	noDebug         bool
 )
 
 func main() {
@@ -63,8 +64,11 @@ func main() {
 	filenamePtr := flag.String("urls", "", "Filename containing the list of URLs")
 	fileDirPtr := flag.String("dir", "", "the directory path containing files to scan")
 	concurrencyPtr := flag.Int("c", 10, "number of concurrent goroutines")
+	noDebugPtr := flag.Bool("nd", false, "no debug - suppress error messages")
 
 	flag.Parse()
+
+	noDebug = *noDebugPtr
 
 	if *helpPtr {
 		flag.Usage()
@@ -74,7 +78,9 @@ func main() {
 	if *fileDirPtr != "" {
 		err := filepath.Walk(*fileDirPtr, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				log.Printf("Error accessing a path %q: %v\n", path, err)
+				if !noDebug {
+					log.Printf("Error accessing a path %q: %v\n", path, err)
+				}
 				return err
 			}
 
@@ -84,7 +90,11 @@ func main() {
 			return nil
 		})
 		if err != nil {
-			log.Fatalf("Error walking the path %v: %v", *fileDirPtr, err)
+			if !noDebug {
+				log.Fatalf("Error walking the path %v: %v", *fileDirPtr, err)
+			} else {
+				os.Exit(1)
+			}
 		}
 		return
 	}
@@ -96,7 +106,11 @@ func main() {
 		var err error
 		urls, err = extractUrls(*filenamePtr)
 		if err != nil {
-			log.Fatalf("Error reading URLs from file %s: %v", *filenamePtr, err)
+			if !noDebug {
+				log.Fatalf("Error reading URLs from file %s: %v", *filenamePtr, err)
+			} else {
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -120,6 +134,13 @@ func main() {
 		close(results)
 	}()
 
+	// Start consumer goroutine before spawning producers to avoid deadlock
+	go func() {
+		for result := range results {
+			log.Println(result)
+		}
+	}()
+
 	for _, url := range urls {
 		semaphore <- struct{}{}
 		go func(url string) {
@@ -128,7 +149,9 @@ func main() {
 
 			req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 			if err != nil {
-				results <- fmt.Sprintf("Error creating request for %s: %v", url, err)
+				if !noDebug {
+					results <- fmt.Sprintf("Error creating request for %s: %v", url, err)
+				}
 				return
 			}
 
@@ -137,7 +160,9 @@ func main() {
 
 			resp, err := client.Do(req)
 			if err != nil {
-				results <- fmt.Sprintf("Error making request to %s: %v", url, err)
+				if !noDebug {
+					results <- fmt.Sprintf("Error making request to %s: %v", url, err)
+				}
 				return
 			}
 
@@ -149,7 +174,9 @@ func main() {
 			body, err := ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
-				results <- fmt.Sprintf("Error reading response body from %s: %v", url, err)
+				if !noDebug {
+					results <- fmt.Sprintf("Error reading response body from %s: %v", url, err)
+				}
 				return
 			}
 
@@ -188,9 +215,7 @@ func main() {
 		}(url)
 	}
 
-	for result := range results {
-		log.Println(result)
-	}
+	wg.Wait()
 }
 
 func extractUrls(filename string) ([]string, error) {
@@ -232,10 +257,18 @@ func readUrlsFromStdin() []string {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading URLs from stdin: %v", err)
+		if !noDebug {
+			log.Fatalf("Error reading URLs from stdin: %v", err)
+		} else {
+			os.Exit(1)
+		}
 	}
 	if len(urls) == 0 {
-		log.Fatalf("No URLs found in stdin")
+		if !noDebug {
+			log.Fatalf("No URLs found in stdin")
+		} else {
+			os.Exit(1)
+		}
 	}
 	return urls
 }
@@ -243,7 +276,9 @@ func readUrlsFromStdin() []string {
 func scanFile(filename string) {
 	content, err := ioutil.ReadFile(filename)
 	if err != nil {
-		log.Printf("Error reading file %s: %v", filename, err)
+		if !noDebug {
+			log.Printf("Error reading file %s: %v", filename, err)
+		}
 		return
 	}
 
